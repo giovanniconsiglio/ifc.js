@@ -102,3 +102,15 @@ dist
 
 # TernJS port file
 .tern-port
+
+# Export folder
+exports/
+
+# Test folder
+Test/
+
+# IFC folder
+IFC/
+
+# ifcjs/WIVGLTF/gltf folder
+ifcjs/WIVGLTF/gltf/
