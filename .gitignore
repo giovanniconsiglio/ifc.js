@@ -114,3 +114,6 @@ IFC/
 
 # ifcjs/WIVGLTF/gltf folder
 ifcjs/WIVGLTF/gltf/
+
+# bundle.js
+ifcjs/WIVGLTF/bundle.js

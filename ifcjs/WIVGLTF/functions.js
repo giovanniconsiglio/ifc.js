@@ -12,6 +12,7 @@ import {
   IFCPLATE,
   IFCCURTAINWALL,
   IFCDOOR,
+  IFCBUILDINGSTOREY,
 } from "web-ifc";
 import {
   MeshLambertMaterial,
@@ -19,9 +20,10 @@ import {
   MeshBasicMaterial,
 } from "../../node_modules/three";
 import Drawing from "dxf-writer";
+import { Dexie } from "dexie";
 
 /////////////////////////////////////////////////////////////////////////////////////////////
-
+let properties;
 async function loadIfc(url, viewer, ifcModels, allPlans, container, obj) {
   // Create progress bar
   const overlay = document.getElementById("loading-overlay");
@@ -44,6 +46,7 @@ async function loadIfc(url, viewer, ifcModels, allPlans, container, obj) {
   // Export to glTF and JSON
   const result = await viewer.GLTF.exportIfcFileAsGltf({
     ifcFileUrl: url,
+    onprogress: true,
     splitByFloors: true,
     categories: {
       walls: [IFCWALL, IFCWALLSTANDARDCASE],
@@ -51,6 +54,7 @@ async function loadIfc(url, viewer, ifcModels, allPlans, container, obj) {
       windows: [IFCWINDOW],
       curtainwalls: [IFCMEMBER, IFCPLATE, IFCCURTAINWALL],
       doors: [IFCDOOR],
+      levels: [IFCBUILDINGSTOREY],
     },
     getProperties: true,
   });
@@ -64,8 +68,12 @@ async function loadIfc(url, viewer, ifcModels, allPlans, container, obj) {
     for (const levelName in category) {
       const file = category[levelName].file;
       if (file) {
-        // link.download = `${file.name}_${categoryName}_${levelName}.gltf`;
-        link.download = "";
+        console.log(file);
+        console.log(category);
+        console.log(categoryName);
+        console.log(levelName);
+        console.log(`${file.name}_${categoryName}_${levelName}.gltf`);
+        link.download = `${categoryName}_${levelName}.gltf`;
         link.href = URL.createObjectURL(file);
         link.click();
       }
@@ -73,200 +81,112 @@ async function loadIfc(url, viewer, ifcModels, allPlans, container, obj) {
   }
 
   for (let jsonFile of result.json) {
-    // link.download = `${jsonFile.name}.json`;
-    link.download = "";
+    link.download = `${jsonFile.name}`;
     link.href = URL.createObjectURL(jsonFile);
     link.click();
   }
 
   link.remove();
-}
 
-/////////////////////////////////////////////////////////////////////////////////////////////
-/*
-async function loadIfc(url, viewer, ifcModels, allPlans, container, obj) {
-  // Create progress bar
-  const overlay = document.getElementById("loading-overlay");
-  const progressText = document.getElementById("loading-progress");
-
-  overlay.classList.remove("hidden");
-  progressText.innerText = `Loading`;
-
-  viewer.IFC.loader.ifcManager.setOnProgress((event) => {
-    const percentage = Math.floor((event.loaded * 100) / event.total);
-    progressText.innerText = `Loaded ${percentage}%`;
-  });
-
-  viewer.IFC.loader.ifcManager.parser.setupOptionalCategories({
-    [IFCSPACE]: false,
-    [IFCOPENINGELEMENT]: false,
-  });
-
-  // Load the model
-  const model = await viewer.IFC.loadIfcUrl(url);
-  console.log(model);
-  ifcModels.push(model);
-  // Add dropped shadow and post-processing effect
-  await viewer.shadowDropper.renderShadow(model.modelID);
-  viewer.context.renderer.postProduction.active = true;
-  const properties = await viewer.IFC.properties.serializeAllProperties(model);
-  // if (firstModel) {
-  //   const matrixArr = await loader.ifcManager.ifcAPI.GetCoordinationMatrix(
-  //     ifcModel.modelID
-  //   );
-  //   const matrix = new Matrix4().fromArray(matrixArr);
-  //   loader.ifcManager.setupCoordinationMatrix(matrix);
-  // }
-
-  // firstModel = false;
+  // Load geometry
+  await viewer.GLTF.loadModel("./gltf/01/doors_Nivel 1.gltf");
+  await viewer.GLTF.loadModel("./gltf/01/slabs_Nivel 1.gltf");
+  await viewer.GLTF.loadModel("./gltf/01/slabs_Nivel 2.gltf");
+  await viewer.GLTF.loadModel("./gltf/01/walls_Nivel 1.gltf");
+  await viewer.GLTF.loadModel("./gltf/01/windows_Nivel 1.gltf");
+  await viewer.GLTF.loadModel("./gltf/01/curtainwalls_Nivel 1.gltf");
+  // Load properties
+  const rawProperties = await fetch("./gltf/01/properties.json");
+  properties = await rawProperties.json();
+  // Get spatial tree
+  const tree = await constructSpatialTree();
+  console.log(tree);
 
   overlay.classList.add("hidden");
+}
 
-  // Generate all plans
-  await viewer.plans.computeAllPlanViews(model.modelID);
+// Utils functions
+function getFirstItemOfType(type) {
+  return Object.values(properties).find((item) => item.type === type);
+}
 
-  const lineMaterial = new LineBasicMaterial({ color: "black" });
-  const baseMaterial = new MeshBasicMaterial({
-    polygonOffset: true,
-    polygonOffsetFactor: 1, // positive value pushes polygon further away
-    polygonOffsetUnits: 1,
-  });
-  await viewer.edges.create(
-    "example",
-    model.modelID,
-    lineMaterial,
-    baseMaterial
+function getAllItemsOfType(type) {
+  return Object.values(properties).filter((item) => item.type === type);
+}
+
+// Get spatial tree
+async function constructSpatialTree() {
+  const ifcProject = getFirstItemOfType("IFCPROJECT");
+
+  const ifcProjectNode = {
+    expressID: ifcProject.expressID,
+    type: "IFCPROJECT",
+    children: [],
+  };
+
+  const relContained = getAllItemsOfType("IFCRELAGGREGATES");
+  const relSpatial = getAllItemsOfType("IFCRELCONTAINEDINSPATIALSTRUCTURE");
+
+  await constructSpatialTreeNode(ifcProjectNode, relContained, relSpatial);
+
+  return ifcProjectNode;
+}
+
+// Recursively constructs the spatial tree
+async function constructSpatialTreeNode(item, contains, spatials) {
+  const spatialRels = spatials.filter(
+    (rel) => rel.RelatingStructure === item.expressID
+  );
+  const containsRels = contains.filter(
+    (rel) => rel.RelatingObject === item.expressID
   );
 
-  // Floor plan viewing
+  const spatialRelsIDs = [];
+  spatialRels.forEach((rel) => spatialRelsIDs.push(...rel.RelatedElements));
 
-  const modelPlans = viewer.plans.getAll(model.modelID);
-  allPlans.push(modelPlans);
-  const key = String(model.modelID);
-  obj[key] = modelPlans;
+  const containsRelsIDs = [];
+  containsRels.forEach((rel) => containsRelsIDs.push(...rel.RelatedObjects));
 
-  ///// Floor plan export
-  viewer.dxf.initializeJSDXF(Drawing);
+  const childrenIDs = [...spatialRelsIDs, ...containsRelsIDs];
 
-  const ifcProject = await viewer.IFC.getSpatialStructure(model.modelID);
-  const storeys = ifcProject.children[0].children[0].children;
-  for (let storey of storeys) {
-    for (let child of storey.children) {
-      if (child.children.length) {
-        storey.children.push(...child.children);
-      }
-    }
-  }
-
-  for (const plan of modelPlans) {
-    const currentPlan = viewer.plans.planLists[model.modelID][plan];
-    // console.log(currentPlan);
-
-    const button = document.createElement("button");
-    container.appendChild(button);
-    button.textContent = "Export " + currentPlan.name;
-    button.id = "Export";
-    button.onclick = () => {
-      const storey = storeys.find(
-        (storey) => storey.expressID === currentPlan.expressID
-      );
-      drawProjectedItems(storey, currentPlan, model.modelID);
+  const children = [];
+  for (let i = 0; i < childrenIDs.length; i++) {
+    const childID = childrenIDs[i];
+    const props = properties[childID];
+    const child = {
+      expressID: props.expressID,
+      type: props.type,
+      children: [],
     };
+
+    await constructSpatialTreeNode(child, contains, spatials);
+    children.push(child);
   }
 
-  const dummySubsetMat = new MeshBasicMaterial({ visible: false });
-
-  async function drawProjectedItems(storey, plan, modelID) {
-    // Create a new drawing (if it doesn't exist)
-    if (!viewer.dxf.drawings[plan.name]) viewer.dxf.newDrawing(plan.name);
-
-    // Get the IDs of all the items to draw
-    const ids = storey.children.map((item) => item.expressID);
-
-    // If no items to draw in this layer in this floor plan, let's continue
-    if (!ids.length) return;
-
-    // If there are items, extract its geometry
-    const subset = viewer.IFC.loader.ifcManager.createSubset({
-      modelID,
-      ids,
-      removePrevious: true,
-      customID: "floor_plan_generation",
-      material: dummySubsetMat,
-    });
-
-    // Get the projection of the items in this floor plan
-    const filteredPoints = [];
-    const edges = await viewer.edgesProjector.projectEdges(subset);
-    const positions = edges.geometry.attributes.position.array;
-
-    // Lines shorter than this won't be rendered
-    const tolerance = 0.01;
-    for (let i = 0; i < positions.length - 5; i += 6) {
-      const a = positions[i] - positions[i + 3];
-      // Z coords are multiplied by -1 to match DXF Y coordinate
-      const b = -positions[i + 2] + positions[i + 5];
-
-      const distance = Math.sqrt(a * a + b * b);
-
-      if (distance > tolerance) {
-        filteredPoints.push([
-          positions[i],
-          -positions[i + 2],
-          positions[i + 3],
-          -positions[i + 5],
-        ]);
-      }
-    }
-
-    // Draw the projection of the items
-    viewer.dxf.drawEdges(
-      plan.name,
-      filteredPoints,
-      "Projection",
-      Drawing.ACI.BLUE,
-      "CONTINUOUS"
-    );
-
-    // Clean up
-    edges.geometry.dispose();
-
-    // Draw all sectioned items. thick and thin are the default layers created by IFC.js
-    viewer.dxf.drawNamedLayer(
-      plan.name,
-      plan,
-      "thick",
-      "Section",
-      Drawing.ACI.RED,
-      "CONTINUOUS"
-    );
-    viewer.dxf.drawNamedLayer(
-      plan.name,
-      plan,
-      "thin",
-      "Section_Secondary",
-      Drawing.ACI.CYAN,
-      "CONTINUOUS"
-    );
-
-    // Download the generated floorplan
-    const result = viewer.dxf.exportDXF(plan.name);
-    const link = document.createElement("a");
-    link.download = "floorplan.dxf";
-    link.href = URL.createObjectURL(result);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  }
-  return model;
+  item.children = children;
 }
 
-function removeAllChildNodes(parent) {
-  while (parent.firstChild) {
-    parent.removeChild(parent.firstChild);
+// Gets the property sets
+
+function getPropertySets(props) {
+  const id = props.expressID;
+  const propertyValues = Object.values(properties);
+  const allPsetsRels = propertyValues.filter(
+    (item) => item.type === "IFCRELDEFINESBYPROPERTIES"
+  );
+  const relatedPsetsRels = allPsetsRels.filter((item) =>
+    item.RelatedObjects.includes(id)
+  );
+  const psets = relatedPsetsRels.map(
+    (item) => properties[item.RelatingPropertyDefinition]
+  );
+  for (let pset of psets) {
+    pset.HasProperty = pset.HasProperties.map((id) => properties[id]);
   }
+  props.psets = psets;
 }
-*/
+
+///////////////////////////////////////////////////////////////////////////////////////
 function browserPanel(viewer, obj, container) {
   let children = container.children;
   let childrenArray = [...children];
@@ -313,4 +233,4 @@ function browserPanel(viewer, obj, container) {
     };
   }
 }
-export { loadIfc, browserPanel };
+export { loadIfc, browserPanel, getPropertySets, properties };

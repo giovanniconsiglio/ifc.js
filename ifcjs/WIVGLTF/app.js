@@ -19,7 +19,12 @@ import {
   MeshBasicMaterial,
 } from "../../node_modules/three";
 import Drawing from "dxf-writer";
-import { loadIfc, browserPanel } from "./functions";
+import {
+  loadIfc,
+  browserPanel,
+  getPropertySets,
+  properties,
+} from "./functions";
 
 ///// Create Viewer
 // Creates subset materials
@@ -45,10 +50,6 @@ viewer.IFC.selector.preselection.material = preselectMat;
 viewer.IFC.selector.highlight.material = preselectMat;
 viewer.IFC.selector.selection.material = selectMat;
 
-const scene = viewer.context.getScene();
-const camera = viewer.context.getCamera();
-const renderer = viewer.context.getRenderer();
-
 ///// Create grid and axes
 viewer.grid.setGrid({
   colorCenterLine: 0x444444,
@@ -61,19 +62,14 @@ viewer.axes.setAxes();
 const ifcModels = [];
 const allPlans = [];
 let obj = {};
-/////////////////////////////////////////////////////////////////////////////////////////////////////
-let firstModel = true;
 
 viewer.IFC.setWasmPath("../../wasm/");
-// loadIfc("../../IFC/01.ifc");
 viewer.IFC.loader.ifcManager.useWebWorkers(true, "../../worker/IFCWorker.js");
 
 viewer.IFC.loader.ifcManager.applyWebIfcConfig({
   USE_FAST_BOOLS: true,
   COORDINATE_TO_ORIGIN: true,
 });
-
-// viewer.context.renderer.postProduction.active = true;
 
 // Load file button
 const inputElement = document.createElement("input");
@@ -85,12 +81,30 @@ inputElement.addEventListener(
     const ifcURL = URL.createObjectURL(changed.target.files[0]);
     const container = document.getElementById("button-container");
     await loadIfc(ifcURL, viewer, ifcModels, allPlans, container, obj);
-    browserPanel(viewer, obj, container);
+    // browserPanel(viewer, obj, container);
   },
   false
 );
 
 ///// Handle events
+
+// Get properties of selected item
+window.ondblclick = async () => {
+  const result = await viewer.IFC.selector.pickIfcItem(true);
+
+  if (result) {
+    console.log(result);
+    const foundProperties = properties[result.id];
+    getPropertySets(foundProperties);
+    createPropertiesMenu(foundProperties);
+    console.log(foundProperties);
+  } else {
+    removeAllChildren(propsGUI);
+    viewer.IFC.selector.unpickIfcItems();
+    return;
+  }
+};
+
 // On mouse move => prePickIfcItem
 window.onmousemove = () => viewer.IFC.selector.prePickIfcItem();
 
@@ -111,38 +125,38 @@ const handleKeyDown = async (event) => {
 window.onkeydown = handleKeyDown;
 
 // On click => pickIfcItem
-document.addEventListener("click", (event) => {
-  const modelId = viewer.IFC.getModelID();
-  // console.log(modelId>=0);
-  if (modelId !== null) {
-    if (event.shiftKey) {
-      viewer.IFC.selector.pickIfcItem(false, false);
-    } else {
-      viewer.IFC.selector.pickIfcItem();
-    }
-  } else {
-    viewer.IFC.selector.unpickIfcItems();
-  }
-});
+// document.addEventListener("click", (event) => {
+//   const modelId = viewer.IFC.getModelID();
+//   // console.log(modelId>=0);
+//   if (modelId !== null) {
+//     if (event.shiftKey) {
+//       viewer.IFC.selector.pickIfcItem(false, false);
+//     } else {
+//       viewer.IFC.selector.pickIfcItem();
+//     }
+//   } else {
+//     viewer.IFC.selector.unpickIfcItems();
+//   }
+// });
 
 // On double click => getProperties
-window.ondblclick = async () => {
-  if (viewer.clipper.active) {
-    cameraControls.enabled = false; ////////TO BE FIXED
-    viewer.clipper.createPlane();
-  } else {
-    const result = await viewer.IFC.selector.highlightIfcItem(true);
+// window.ondblclick = async () => {
+//   if (viewer.clipper.active) {
+//     cameraControls.enabled = false; ////////TO BE FIXED
+//     viewer.clipper.createPlane();
+//   } else {
+//     const result = await viewer.IFC.selector.highlightIfcItem(true);
 
-    if (!result) {
-      removeAllChildren(propsGUI);
-      viewer.IFC.selector.unHighlightIfcItems();
-      return;
-    }
-    const { modelID, id } = result;
-    const props = await viewer.IFC.getProperties(modelID, id, true, false);
-    createPropertiesMenu(props);
-  }
-};
+//     if (!result) {
+//       removeAllChildren(propsGUI);
+//       viewer.IFC.selector.unHighlightIfcItems();
+//       return;
+//     }
+//     const { modelID, id } = result;
+//     const props = await viewer.IFC.getProperties(modelID, id, true, false);
+//     createPropertiesMenu(props);
+//   }
+// };
 
 ///// Setup UI
 const loadButton = createSideMenuButton("../resources/folder-icon.svg");
@@ -194,26 +208,20 @@ const serializeProperties = createSideMenuButton("../resources/json.svg");
 serializeProperties.addEventListener("click", async () => {
   serializeProperties.blur();
   let jsonProps = [];
-  // console.log(jsonProps);
-  // console.log(ifcModels);
   // Serialize properties
   if (ifcModels.length > 1) {
     for (let model of ifcModels) {
       const result = await viewer.IFC.properties.serializeAllProperties(model);
-      // console.log(result);
       jsonProps.push(result);
     }
   } else {
     const result = await viewer.IFC.properties.serializeAllProperties(
       ifcModels[0]
     );
-    // console.log(result);
     jsonProps = result;
   }
   // Download the properties as JSON file
   const file = new File(jsonProps, "properties");
-  // console.log(jsonProps);
-  // console.log(file);
   const link = document.createElement("a");
   link.href = URL.createObjectURL(file);
   link.download = "properties.json";
@@ -221,7 +229,7 @@ serializeProperties.addEventListener("click", async () => {
   link.remove();
 });
 
-///// Create properties menu
+// ///// Create properties menu
 const propsGUI = document.getElementById("ifc-property-menu-root");
 
 function createPropertiesMenu(properties) {
